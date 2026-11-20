@@ -22,6 +22,8 @@ services:
         value: "1"
       - key: BTC5_BACKUP_FIRST
         value: "120"
+      - key: BTC5_LOW_MEM
+        value: "1"
       # Optional. If set, every trading settings/mode change needs header X-BTC5-Token.
       # Recommended on a public onrender.com URL. Emergency stop never requires it.
       - key: BTC5_ADMIN_TOKEN

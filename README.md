@@ -35,22 +35,32 @@ change non-trading settings. Set `BTC5_ADMIN_TOKEN` to lock trading controls.
 ## Persistence
 
 Render's disk is ephemeral. On startup, if `data/btc5.db` is missing, `backup.restore()` downloads
-`db/btc5.db.gz` from the public bucket (and will not overwrite a present local DB). When `HF_TOKEN`
-is set, a consistent SQLite snapshot is gzipped and uploaded about every 10 minutes and again on
-shutdown. A backup is refused if the remote copy holds **more** rounds than the local DB, so a
-fresh empty container cannot wipe history.
+`db/btc5.db.gz` from the public bucket (and will not overwrite a present local DB), then replays
+`db/incr.json`. When `HF_TOKEN` is set:
+
+- After every lock and every official grade, a compact incremental record is merged into
+  `db/incr.json` and uploaded immediately (small and fast).
+- A full SQLite snapshot is gzipped (streamed, so it does not double RAM) and uploaded about every
+  10 minutes, skipped while a training job is running.
+- SIGTERM (Render's stop signal) flushes incrementals first, then attempts a full snapshot, so a
+  lock taken seconds earlier is not lost if the process is stopped before the next 10-minute backup.
+
+Replay only inserts records that already carry their original `decision_ts` / `official_outcome`.
+It never re-locks a past round or invents a prediction. A full snapshot is refused if the remote
+copy holds **more** rounds than the local DB, so a fresh empty container cannot wipe history.
+
+## Memory (512 MB / 0.1 CPU)
+
+`BTC5_LOW_MEM=1` (the Render default): training runs **in-process** (no spawn worker — a second
+Python with sklearn was the 1:36 AM ET OOM), skips the GBDT challenger and the 10-day 1s backfill,
+caps the walk-forward window, and holds BLAS/OpenMP to 1 thread. Incremental backups stay tiny;
+the full DB snapshot is not taken while training is running.
 
 ## Keep-alive
 
 Render free web services sleep after ~15 minutes with no inbound HTTP. A background task pings
 `RENDER_EXTERNAL_URL/api/health` every 10 minutes. Failures are logged and never take the server down.
 
-## Memory (512 MB / 0.1 CPU)
-
-One Python process (uvicorn + in-process backup/pusher/keep-alive). BLAS/OpenMP threads are capped
-at 1. Model training still runs in a one-worker `ProcessPoolExecutor` so a T90 lock is never delayed;
-that child can briefly raise memory use. If the free instance OOMs during a train/backfill, it will
-restart and restore the DB from the bucket.
 
 ## Local
 

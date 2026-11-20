@@ -1,21 +1,31 @@
 """Training / promotion job. Runs in a SEPARATE PROCESS so CPU work can never delay a T90 decision event.
 Champion/challenger: a new model is promoted only after it is significantly better (paired log-loss CI < 0) on at least
 `promotion_min_rounds` real rounds that occurred AFTER the champion's training data ended."""
-import asyncio, json, time, math
+import asyncio, gc, json, os, time, math
 import numpy as np
-from .config import Config
+from .config import Config, low_mem
 from .db import DB
 from . import backtest as BT, history
 from .model import ARCH, save, load, metrics
 
 def job(do_backfill=True, days=None):
     cfg = Config(); db = DB(cfg.db_path); out = {"started": time.time()}
+    light = low_mem()
+    if light:
+        days = days if days is not None else float(os.environ.get("BTC5_TRAIN_DAYS", "4"))
+        # Default: no 10-day 1s-bar backfill on a 512 MB host (that plus a child fit was the OOM).
+        if os.environ.get("BTC5_TRAIN_BACKFILL", "0") != "1":
+            do_backfill = False
+        out["low_mem"] = True
+        out["days"] = days
     if do_backfill:
         try: out["backfilled"] = asyncio.run(history.backfill(cfg, db, days or cfg.backfill_days))
         except Exception as e: out["backfill_error"] = str(e)
     champ_ver = db.kv_get("champion")
-    res = BT.run(db, days)
-    if "error" in res: out["error"] = res["error"]; return out
+    archs = ("stack", "lr") if light else ("stack", "gbdt", "lr")
+    res = BT.run(db, days, archs=archs, max_rounds=int(os.environ.get("BTC5_TRAIN_MAX_ROUNDS", "800")) if light else None,
+                 step_frac=float(os.environ.get("BTC5_TRAIN_STEP_FRAC", "0.2")) if light else 0.1)
+    if "error" in res: out["error"] = res["error"]; gc.collect(); return out
     db.x("INSERT INTO backtests(ts,params_json,results_json) VALUES (?,?,?)", (time.time(), json.dumps({"days": days, "trigger": "training job"}), json.dumps(res, default=str)))
     winner, tests, ds = BT.select_champion(db, res)
     out["arch_tests"] = tests; out["arch_winner"] = winner
@@ -29,7 +39,7 @@ def job(do_backfill=True, days=None):
     if not champ_ver:
         m = ARCH[winner]().fit(rows, y, regs, dq)
         v = save(db, m, "champion", len(ds), meta, ds[-1]["T"]); db.kv_set("champion", v); db.kv_set("reliability", meta); out["promoted"] = v; out["reason"] = "initial champion (walk-forward selected)"
-        return out
+        gc.collect(); return out
     cr = db.one("SELECT * FROM model_versions WHERE version=?", (champ_ver,)); cm = json.loads(cr["metrics_json"])
     train_end = cm.get("train_end_ts", 0)
     hold = [i for i, d in enumerate(ds) if d["T"] > train_end]
@@ -60,7 +70,7 @@ def job(do_backfill=True, days=None):
     # refresh reliability tables (evaluation only) for the architecture that is actually DEPLOYED
     db.kv_set("reliability", meta_for(deployed_arch)); db.kv_set("challenger_status", dict(status, ts=time.time()))
     out["challenger"] = status
-    return out
+    gc.collect(); return out
 
 NONINFERIORITY_LL = 0.01     # max tolerated upper-95% log-loss excess when the point estimate favours the challenger
 MAX_ACC_DROP = 0.01

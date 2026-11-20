@@ -8,7 +8,7 @@ For each 5-minute round T0 (Polymarket eventStartTime, validated):
   T300+    COMPLETED   official Polymarket resolution (Gamma 1/0 payout) verified; result + failure analysis recorded
 If the process was not running (box paused) at T90 the round is recorded MISSED with the reason — never back-dated."""
 import asyncio, json, math, os, time, collections, statistics, traceback, concurrent.futures, multiprocessing
-from .config import Config, confidence_class, CONFIDENCE_ORDER
+from .config import Config, low_mem, confidence_class, CONFIDENCE_ORDER
 from .polymarket import round_start_for, MarketIdentificationError
 from . import features as F
 from .agents import specialist_reports, validator_report
@@ -78,7 +78,8 @@ class Engine:
         self.training = {"running": False, "last": None, "last_ts": None, "error": None}
         self.resolved_since_train = 0
         self.loop_lag = collections.deque(maxlen=240)
-        self.pool = concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+        # A spawn-pool worker would load a second copy of numpy/sklearn and OOM a 512 MB host. On low-mem we train in-process.
+        self.pool = None if low_mem() else concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
         self.trader = None            # btc5.trading.Trader (attached by app.py); trades only AFTER the immutable lock
 
     # ------------------------------------------------------------ util
@@ -277,6 +278,16 @@ class Engine:
         info["degraded"] = bool(degraded or info.get("data_quality", 0) < 0.6)
         return f, info, flags
 
+    def persist_round(self, rid):
+        """Best-effort incremental backup of one lock or grade. Never raises, never blocks the event loop on HTTP."""
+        async def go():
+            try:
+                import backup
+                await asyncio.to_thread(backup.record_round, rid)
+            except Exception as e:
+                self.log("BACKUP", "warning", f"incremental backup failed: {e!r}", rid)
+        self.spawn(go())
+
     async def decide(self, T, market, crowd, decision_ts, S):
         cfg = self.cfg; rid = f"{cfg.slug_prefix}{T}"; T90 = T + cfg.decision_offset_s
         dev_ms = (decision_ts - T90) * 1000
@@ -318,6 +329,7 @@ class Engine:
             self.db.x("INSERT OR REPLACE INTO live_features VALUES (?,?,?,?)", (rid, T, json.dumps({"f": f, "books": self.live.books, "derivs": {k: v for k, v in self.live.derivs.items() if not k.endswith("series")}}, default=str), None))
             self.state["prediction"] = self.public(self.db.get_round(rid)); self.state["phase"] = "PREDICTION LOCKED"; self.state["prelim"] = None
             self.log("PREDICTION", "info", f"LOCKED {direction} · P(UP) {p:.3f} · {confidence_class(p)} · deviation {dev_ms:+.1f} ms · {status}", rid)
+            self.persist_round(rid)
             if self.trader is not None: self.spawn(self._trade(rec, market))
             return rec
         except Exception as e:
@@ -327,6 +339,7 @@ class Engine:
     async def _trade(self, rec, market):
         try: await self.trader.on_lock(rec, market)
         except Exception as e: self.log("TRADING", "error", f"trade decision failed: {type(e).__name__}: {e}", rec["round_id"])
+        self.persist_round(rec["round_id"])
 
     async def track(self, T):
         await self.resolve(f"{self.cfg.slug_prefix}{T}", T, T + 300)
@@ -364,6 +377,7 @@ class Engine:
                         self.log("RESOLUTION", "info", f"Official result {outcome} (Polymarket Gamma, closed + UMA resolved; Chainlink spot open {so} close {sc}) — prediction {result}{note}", rid)
                     if self.state.get("prediction") and self.state["prediction"]["round_id"] == rid:
                         self.state["prediction"] = self.public(self.db.get_round(rid)); self.state["phase"] = "ROUND COMPLETED"
+                    self.persist_round(rid)
                     self.resolved_since_train += 1
                     if self.resolved_since_train >= int((self.settings.get("model") or {}).get("retrain_every", self.cfg.retrain_every_rounds)):
                         self.spawn(self.train(backfill=True))
@@ -392,20 +406,38 @@ class Engine:
         return reasons
 
     async def train_when_clock_ready(self, backfill=True, days=None):
-        """Wait for a tight clock sync (or a short deadline) before the process-pool fit, so time
-        probes on a 0.1 CPU host are not competing with sklearn at boot."""
+        """Wait for a tight clock sync (or a short deadline) before training, so time probes on a
+        0.1 CPU host are not competing with sklearn at boot. On a 512 MB host we also skip the
+        heavy history backfill and run a light in-process fit."""
         deadline = time.time() + float(os.environ.get("BTC5_TRAIN_WAIT_CLOCK_S", "90"))
         while self.running and time.time() < deadline and not self.clock.synced:
             await self.sleep(2)
-        if self.running:
+        if not self.running:
+            return
+        if low_mem():
+            # Give feeds and the first incremental/full backup a moment; don't stack RAM users at boot.
+            await self.sleep(float(os.environ.get("BTC5_TRAIN_BOOT_DELAY_S", "30")))
+            if not self.running:
+                return
+            await self.train(backfill=False, days=days)
+        else:
             await self.train(backfill=backfill, days=days)
 
     async def train(self, backfill=True, days=None):
         if self.training["running"]: return
         self.training.update(running=True, started=time.time(), error=None)
-        self.log("MODEL", "info", "Training job started (separate process): incremental real-data backfill + walk-forward + champion/challenger")
+        where = "in-process, light window" if low_mem() else "separate process"
+        self.log("MODEL", "info", f"Training job started ({where}): incremental real-data backfill + walk-forward + champion/challenger")
         try:
-            out = await asyncio.get_running_loop().run_in_executor(self.pool, training.job, backfill, days)
+            import backup
+            backup.set_training(True)
+        except Exception:
+            backup = None
+        try:
+            if self.pool is not None:
+                out = await asyncio.get_running_loop().run_in_executor(self.pool, training.job, backfill, days)
+            else:
+                out = await asyncio.to_thread(training.job, backfill, days)
             self.training.update(last=out, last_ts=time.time()); self.db.kv_set("last_train_ts", time.time()); self.resolved_since_train = 0
             v = self.brain.reload()
             self.log("MODEL", "info", f"Training job finished: {out.get('promoted') and 'promoted ' + out['promoted'] or (out.get('challenger') or {}).get('decision') or out.get('error')}; champion {v}")
@@ -413,6 +445,11 @@ class Engine:
             self.training["error"] = str(e); self.log("MODEL", "error", f"Training job failed: {e}")
         finally:
             self.training["running"] = False
+            try:
+                if backup is not None:
+                    backup.set_training(False)
+            except Exception:
+                pass
 
     @staticmethod
     def public(rec):

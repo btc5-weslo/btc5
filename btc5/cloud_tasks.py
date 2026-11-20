@@ -136,8 +136,8 @@ async def shutdown():
             _stop.set()
         if enabled_backup() and not _shutdown_backup_done:
             import backup
-            _say("shutdown: backing up DB to the HF bucket")
-            await asyncio.to_thread(backup.backup_once)
+            _say("shutdown: flushing incremental + full DB backup")
+            await asyncio.to_thread(backup.flush_shutdown)
             _shutdown_backup_done = True
     except Exception as e:
         _say(f"shutdown backup failed: {e!r}")

@@ -14,11 +14,16 @@ def load_series(db):
     fu = [(r["ts"], r["rate"]) for r in db.q("SELECT * FROM funding ORDER BY ts")]
     return m1, oi, fu
 
-def build_dataset(db, since_ts=0):
+def build_dataset(db, since_ts=0, max_rounds=None):
     m1, oi, fu = load_series(db)
     m1t = [b[0] for b in m1]; oit = [x[0] for x in oi]; fut = [x[0] for x in fu]
     out = []
-    for r in db.q("SELECT start_ts, outcome, crowd_json, s1 FROM hist_rounds WHERE outcome IS NOT NULL AND s1 IS NOT NULL AND start_ts>=? ORDER BY start_ts", (since_ts,)):
+    q = "SELECT start_ts, outcome, crowd_json, s1 FROM hist_rounds WHERE outcome IS NOT NULL AND s1 IS NOT NULL AND start_ts>=? ORDER BY start_ts"
+    # Cap the window from the end so a 512 MB host does not unpack thousands of 1s-bar blobs at once.
+    rows = db.q(q, (since_ts,))
+    if max_rounds and len(rows) > max_rounds:
+        rows = rows[-int(max_rounds):]
+    for r in rows:
         T = r["start_ts"]; cut = T + 90
         i = bisect.bisect_left(m1t, cut); j = bisect.bisect_left(oit, cut); k = bisect.bisect_right(fut, cut)
         f, info = F.compute(T, unpack(r["s1"]), m1[max(0, i - 400):i + 2], json.loads(r["crowd_json"]) if r["crowd_json"] else None,
@@ -57,12 +62,12 @@ def segment(p, y, keys):
         if m.sum(): out[k] = {"n": int(m.sum()), "accuracy": round(float(((p[m] >= 0.5) == y[m]).mean()), 4)}
     return out
 
-def run(db, days=None, archs=("stack", "gbdt", "lr")):
+def run(db, days=None, archs=("stack", "gbdt", "lr"), max_rounds=None, step_frac=0.1):
     t0 = time.time()
     since = 0 if not days else int(time.time() - days * 86400)
-    ds = build_dataset(db, since)
+    ds = build_dataset(db, since, max_rounds=max_rounds)
     if len(ds) < 200: return {"error": f"only {len(ds)} real historical rounds available; need >= 200", "n": len(ds)}
-    oos, agent_oos, start, folds = walk_forward(ds, archs)
+    oos, agent_oos, start, folds = walk_forward(ds, archs, step_frac=step_frac)
     test = ds[start:]; y = np.array([d["y"] for d in test])
     res = {"generated_ts": time.time(), "n_rounds": len(ds), "n_test": len(test), "first_round": ds[0]["T"], "last_round": ds[-1]["T"],
            "test_from": test[0]["T"], "folds": folds, "method": "expanding-window walk-forward; each fold trains only on earlier rounds",

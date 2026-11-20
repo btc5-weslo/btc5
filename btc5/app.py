@@ -140,7 +140,8 @@ def health():
             "training": {k: v for k, v in eng.training.items() if k != "last"}, "challenger": db.kv_get("challenger_status"),
             "last_decision": last, "uptime_s": round(time.time() - G["started"]), "db_bytes": os.path.getsize(cfg.db_path),
             "mode": ("LIVE TRADING (real money)" if G["trader"].settings["mode"] == "live" else "DEMO trading (paper money, real Polymarket prices)") if G.get("trader") else "PREDICTION ONLY",
-            "settings_mode": eng.settings.get("mode"), "keepalive": cloud_tasks.snapshot()}
+            "settings_mode": eng.settings.get("mode"), "keepalive": cloud_tasks.snapshot(),
+            "persistence": __import__("backup").snapshot_status(), "low_mem": __import__("btc5.config", fromlist=["low_mem"]).low_mem()}
 
 @app.get("/api/health")
 def api_health():

@@ -28,6 +28,11 @@ class Config:
     promotion_min_rounds: int = _i("BTC5_PROMOTION_MIN_ROUNDS", 300)
     live_feature_min_samples: int = _i("BTC5_LIVE_FEATURE_MIN", 300)
 
+def low_mem():
+    """Render free is 512 MB. When set, training stays in-process, skips GBDT, and caps the data window."""
+    return os.environ.get("BTC5_LOW_MEM", "0") == "1"
+
+
 CONFIDENCE_ORDER = ["VERY LOW", "LOW", "MODERATE", "HIGH", "VERY HIGH"]
 
 def confidence_class(p_up):

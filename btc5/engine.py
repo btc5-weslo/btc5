@@ -138,7 +138,7 @@ class Engine:
         """Persistent-state recovery after a restart/pause: re-attach pending resolutions and account for every round the
         system was offline for (recorded MISSED with reason, last 24 h)."""
         now = self.clock.now()
-        for r in self.db.q("SELECT round_id,start_ts,end_ts FROM rounds WHERE official_outcome IS NULL AND end_ts > ? AND (result IS NULL OR result='PENDING')", (now - 86400,)):
+        for r in self.db.q("SELECT round_id,start_ts,end_ts FROM rounds WHERE official_outcome IS NULL AND end_ts > ? AND (result IS NULL OR result IN ('PENDING','UNVERIFIED'))", (now - 86400,)):
             self.spawn(self.resolve(r["round_id"], r["start_ts"], r["end_ts"]))
         last = self.db.one("SELECT MAX(start_ts) t FROM rounds")["t"]
         cur = round_start_for(now)
@@ -461,4 +461,15 @@ class Engine:
         out["agents"] = json.loads(rec["agents_json"]) if rec.get("agents_json") else None
         ev = json.loads(rec["evidence_json"]) if rec.get("evidence_json") else {}
         out["flags"] = ev.get("flags"); out["failure_analysis"] = json.loads(rec["failure_analysis"]) if rec.get("failure_analysis") else None
+        # official_open/official_close are Polymarket's display of Chainlink SPOT prices (reference only). The contract settles on
+        # Chainlink's 60-second TWAP, so spot can point the other way while the official outcome is correct.
+        so, sc = rec.get("official_open"), rec.get("official_close")
+        out["spot_direction"] = None if so is None or sc is None else ("UP" if sc >= so else "DOWN")
+        out["spot_disagrees"] = bool(out["spot_direction"] and rec.get("official_outcome") and out["spot_direction"] != rec.get("official_outcome"))
+        out["settlement"] = "Polymarket official resolution (Chainlink BTC/USD 60s TWAP)"
+        out["polymarket_url"] = f"https://polymarket.com/event/{rec['round_id']}" if rec.get("round_id") else None
+        try:
+            rj = json.loads(rec.get("resolution_json") or "{}"); rg = rj.get("regrade") if isinstance(rj, dict) else None
+        except Exception: rg = None
+        out["regraded"] = {k: rg.get(k) for k in ("ts", "from_outcome", "from_result")} if rg else None
         return out

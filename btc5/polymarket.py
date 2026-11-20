@@ -57,11 +57,14 @@ def validate_market(m: dict, expected_start: int, cfg) -> MarketInfo:
                       fee_exponent=float((m.get("feeSchedule") or {}).get("exponent") or 1), order_min_size=float(m.get("orderMinSize") or 0),
                       tick_size=str(m.get("orderPriceMinTickSize") or "0.01"), neg_risk=bool(m.get("negRisk")))
 
-def parse_resolution(m: dict):
-    """'UP'/'DOWN' only when Polymarket shows the market closed with a definitive 1/0 payout; otherwise None (not yet official)."""
+def parse_resolution(m: dict, strict: bool = False):
+    """'UP'/'DOWN' only when Polymarket shows the market closed with a definitive 1/0 payout; otherwise None (not yet official).
+    strict=True (used for GRADING live predictions) additionally requires umaResolutionStatus == 'resolved' — a closed market
+    whose resolution status is missing is treated as not yet official and retried later, never guessed."""
     if not m or not m.get("closed"):
         return None
-    if m.get("umaResolutionStatus") not in (None, "", "resolved"):
+    st = m.get("umaResolutionStatus")
+    if st not in (None, "", "resolved") or (strict and st != "resolved"):
         return None
     try:
         prices = [float(x) for x in json.loads(m["outcomePrices"])]
@@ -117,7 +120,7 @@ class Polymarket:
     async def resolution(self, start_ts: int):
         m = await self.market_raw(start_ts)
         if not m: return None, None
-        return parse_resolution(m), {k: m.get(k) for k in ("closed", "outcomes", "outcomePrices", "umaResolutionStatus", "closedTime", "resolutionSource")}
+        return parse_resolution(m, strict=True), {k: m.get(k) for k in ("closed", "outcomes", "outcomePrices", "umaResolutionStatus", "closedTime", "resolutionSource")}
 
     async def price_history(self, token: str, start: int, end: int):
         r = await self.c.get(f"{self.cfg.clob_url}/prices-history", headers=UA, timeout=8,

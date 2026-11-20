@@ -145,7 +145,16 @@ def _richer(a, b):
         return bool(ra.get("official_outcome"))
     if bool(ra.get("prediction")) != bool(rb.get("prediction")):
         return bool(ra.get("prediction"))
-    return False
+    # same completeness: a later official-result correction (regrade vs Polymarket) wins
+    return _regrade_ts(ra) > _regrade_ts(rb)
+
+
+def _regrade_ts(row):
+    try:
+        rj = json.loads((row or {}).get("resolution_json") or "{}")
+        return float(((rj.get("regrade") or {}) if isinstance(rj, dict) else {}).get("ts") or 0)
+    except Exception:
+        return 0.0
 
 
 def _round_cols(row):
@@ -323,6 +332,13 @@ def apply_incremental_round(db, bundle):
         )
         _apply_trades(db, trades)
         return "graded"
+    if existing.get("official_outcome") and rec.get("official_outcome") and _regrade_ts(rec) > _regrade_ts(existing):
+        # a newer correction to Polymarket's official outcome made after this snapshot was taken: re-apply it
+        from btc5 import regrade
+        rj = json.loads(rec.get("resolution_json") or "{}")
+        regrade.correct_round(db, rid, rec["official_outcome"], {k: v for k, v in rj.items() if k != "regrade"}, meta=rj.get("regrade"))
+        _apply_trades(db, trades)
+        return "regraded"
     _apply_trades(db, trades)
     return "kept"
 
@@ -411,7 +427,7 @@ def _prune_incr_contained_in_db(path):
         keep = {}
         for rid, bundle in rounds.items():
             row = (bundle or {}).get("round") or bundle or {}
-            ex = con.execute("SELECT status, prediction, decision_ts, official_outcome FROM rounds WHERE round_id=?", (rid,)).fetchone()
+            ex = con.execute("SELECT status, prediction, decision_ts, official_outcome, resolution_json FROM rounds WHERE round_id=?", (rid,)).fetchone()
             if not ex:
                 keep[rid] = bundle
                 continue

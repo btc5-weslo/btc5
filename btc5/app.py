@@ -56,6 +56,8 @@ async def lifespan(app):
     if trader.creds_configured(): bg(trader.connect())   # read-only wallet status; mode stays DEMO
     from . import cloud_tasks
     cloud_tasks.start(bg, client)   # no-op unless Render/HF env vars are set
+    from . import regrade
+    if regrade.enabled(): bg(regrade.loop(eng))   # audit grades vs Polymarket's official resolution (startup + every 10 min)
     yield
     eng.running = False; live.running = False; trader.running = False
     await cloud_tasks.shutdown()
@@ -141,7 +143,7 @@ def health():
             "last_decision": last, "uptime_s": round(time.time() - G["started"]), "db_bytes": os.path.getsize(cfg.db_path),
             "mode": ("LIVE TRADING (real money)" if G["trader"].settings["mode"] == "live" else "DEMO trading (paper money, real Polymarket prices)") if G.get("trader") else "PREDICTION ONLY",
             "settings_mode": eng.settings.get("mode"), "keepalive": cloud_tasks.snapshot(),
-            "persistence": __import__("backup").snapshot_status(), "low_mem": __import__("btc5.config", fromlist=["low_mem"]).low_mem()}
+            "persistence": __import__("backup").snapshot_status(), "regrade": __import__("btc5.regrade", fromlist=["snapshot"]).snapshot(), "low_mem": __import__("btc5.config", fromlist=["low_mem"]).low_mem()}
 
 @app.get("/api/health")
 def api_health():

@@ -1,0 +1,38 @@
+# Render Blueprint for POLYMARKET BTC-5 (free web service).
+# After first deploy, set HF_TOKEN in the Render dashboard (the blueprint leaves it blank).
+# Optional live-trading secrets are also dashboard-only — never put values in this file.
+services:
+  - type: web
+    name: btc5
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: HF_TOKEN
+        sync: false
+      - key: BTC5_FEED_SOURCE
+        value: cloud
+      - key: BTC5_FEED_ROLE
+        value: primary
+      - key: BTC5_DB_BACKUP
+        value: "1"
+      - key: BTC5_BACKUP_EVERY
+        value: "600"
+      - key: BTC5_INPROCESS_PUSH
+        value: "1"
+      - key: BTC5_BACKUP_FIRST
+        value: "120"
+      # Optional. If set, every trading settings/mode change needs header X-BTC5-Token.
+      # Recommended on a public onrender.com URL. Emergency stop never requires it.
+      - key: BTC5_ADMIN_TOKEN
+        sync: false
+      # Optional. Only needed if you later switch this instance to LIVE trading.
+      # The process ALWAYS boots in DEMO even when these are present.
+      - key: POLYMARKET_PRIVATE_KEY
+        sync: false
+      - key: POLYMARKET_FUNDER
+        sync: false
+      - key: POLYMARKET_SIGNATURE_TYPE
+        sync: false
+      - key: BTC5_LIVE_MAX_STAKE_USD
+        sync: false

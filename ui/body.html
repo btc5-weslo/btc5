@@ -1,0 +1,82 @@
+<header class="top"><div class="bar">
+ <div class="logo"><i>₿</i><div>BTC-5<small>Polymarket 5-min</small></div></div>
+ <nav class="tabs" id="tabs"></nav>
+ <div class="sp"></div>
+ <span class="pill btcp hide-m" id="pxPill"><span class="d" id="feedDot"></span><span class="num" id="pxTop">—</span></span>
+ <div class="seg" id="modeSeg"><button class="demo" data-m="demo">DEMO</button><button class="live" data-m="live">LIVE</button></div>
+ <label class="sw" title="Automatically trade every locked prediction"><span>Auto</span><input type="checkbox" id="autoT"><i></i></label>
+ <button class="estop hide" id="estop" title="Emergency stop: auto-trade off, back to Demo, cancel open orders">STOP</button>
+</div></header>
+<main>
+ <div id="banners"></div>
+ <section data-tab="Live">
+  <div class="grid g-hero">
+   <div class="card ringw"><div class="row" style="justify-content:space-between;width:100%"><span class="lbl" id="rid">—</span><span class="phase" id="phase">—</span></div>
+    <div class="ring"><svg width="100%" height="100%" viewBox="0 0 200 200"><circle cx="100" cy="100" r="88" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="12"/>
+     <circle id="ringLock" cx="100" cy="100" r="88" fill="none" stroke="rgba(124,140,255,.25)" stroke-width="12" stroke-dasharray="165.9 552.9"/>
+     <circle id="ringP" cx="100" cy="100" r="88" fill="none" stroke="url(#rg)" stroke-width="12" stroke-linecap="round" stroke-dasharray="0 552.9"/>
+     <line id="lockTick" x1="177" y1="100" x2="198" y2="100" stroke="#fff" stroke-width="2.5" stroke-linecap="round" transform="rotate(108 100 100)"/>
+     <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#22c58b"/></linearGradient></defs></svg>
+     <div class="c"><div class="l" id="cdl">Locks in</div><div class="v num" id="cd">—</div><div class="lbl num" id="cd2">—</div></div></div>
+    <div class="sub" id="stage" style="text-align:center;min-height:19px;font-size:12px"></div></div>
+   <div class="card"><div id="pbody" class="pred"></div></div>
+   <div class="card px"><h3>BTC / USD <small id="pxsrc">—</small></h3><div class="big num" id="px">—</div><div class="sub mt8" id="diff">—</div>
+    <div class="kv mt" id="mkt"></div></div>
+  </div>
+  <div class="card strip mt" id="strip"></div>
+  <div class="grid g21 mt">
+   <div class="card"><h3>Price chart <span class="segs" id="tfseg"><button data-tf="1s">1s</button><button data-tf="1m" class="on">1m</button></span></h3>
+    <div class="chartwrap"><canvas id="chart" height="300"></canvas><div class="tip" id="tip"></div></div>
+    <div class="row mt8" style="font-size:11.5px;color:var(--t3);gap:14px"><span><b style="color:#7c8cff">—</b> EMA 20</span><span><b style="color:#f5b544">- -</b> Round open</span><span><b style="color:#fff">|</b> 1:30 lock</span><span id="chsrc"></span></div></div>
+   <div class="card"><h3>This round's trade <small id="trMode"></small></h3><div id="curTrade"></div><h3 style="margin-top:22px">Recent trades</h3><div id="recent"></div></div>
+  </div>
+  <div class="grid g3 mt" id="quick"></div>
+ </section>
+
+ <section data-tab="Trades" class="hide">
+  <div class="grid g5" id="tstats"></div>
+  <div class="grid g21 mt">
+   <div class="card"><h3>Equity curve <small id="eqNote"></small></h3><canvas id="eq" height="240"></canvas></div>
+   <div class="card"><h3>Quick controls</h3><div id="ctlRO"></div>
+    <div class="field"><label>Stake per round</label><div class="qs" id="stakeQs"></div></div>
+    <div class="row mt" style="gap:8px;flex-wrap:nowrap"><div class="money" style="flex:1"><input class="inp num" id="stakeIn" type="number" min="1" step="1"></div><button class="btn" id="stakeSave">Set stake</button></div>
+    <div class="row mt" style="justify-content:space-between"><label class="sw"><input type="checkbox" id="autoT2"><i></i><span style="display:inline">Auto-trade every round</span></label></div>
+    <div class="mt" style="border-top:1px solid var(--line);padding-top:16px"><div class="lbl">Demo bankroll</div>
+     <div class="row mt8" style="gap:8px;flex-wrap:nowrap"><div class="money" style="flex:1"><input class="inp num" id="bankIn" type="number" min="10" step="50"></div><button class="btn sec" id="resetDemo">Reset demo</button></div>
+     <div class="note">Reset starts a fresh demo balance. Earlier trades stay in history.</div></div></div>
+  </div>
+  <div class="card mt"><h3>Trade history <span class="segs" id="tfilter"><button data-f="all" class="on">All</button><button data-f="demo">Demo</button><button data-f="live">Live</button></span></h3><div id="tlist"></div></div>
+ </section>
+
+ <section data-tab="History" class="hide">
+  <div class="grid g5" id="hstats"></div>
+  <div class="card mt"><h3>Prediction history <small id="hn"></small></h3><div id="hist"></div></div>
+ </section>
+
+ <section data-tab="Model" class="hide">
+  <div class="grid g2"><div class="card" id="valcard"></div><div class="card" id="modelcard"></div></div>
+  <div class="grid g3 mt" id="agents"></div>
+  <div class="grid g2 mt"><div class="card" id="btcard"></div><div class="card" id="intel"></div></div>
+ </section>
+
+ <section data-tab="Settings" class="hide">
+  <div class="grid g2">
+   <div class="card" id="wallet"></div>
+   <div class="card"><h3>Trading risk limits <small id="limMode"></small></h3><div id="riskRO"></div>
+    <div class="grid g2" style="gap:12px">
+     <div class="field"><label>Stake per round (USD)</label><div class="money"><input class="inp num" id="l_stake" type="number" min="1" step="1"></div></div>
+     <div class="field"><label>Max daily loss (USD)</label><div class="money"><input class="inp num" id="l_dl" type="number" min="1" step="5"></div></div>
+     <div class="field"><label>Max open exposure (USD)</label><div class="money"><input class="inp num" id="l_ex" type="number" min="1" step="10"></div></div>
+     <div class="field"><label>Max entry price (¢ per share)</label><input class="inp num" id="l_px" type="number" min="2" max="99" step="1"></div>
+     <div class="field" style="grid-column:1/-1"><label>Minimum confidence to trade</label><select class="inp" id="l_conf"><option>VERY LOW</option><option>LOW</option><option>MODERATE</option><option>HIGH</option><option>VERY HIGH</option></select></div>
+    </div>
+    <div class="row mt"><button class="btn" id="limSave">Save limits</button><span class="note" style="margin:0">“VERY LOW” trades every locked round. Entry price cap skips rounds where the odds are too expensive.</span></div></div>
+  </div>
+  <div class="grid g2 mt"><div class="card" id="engineCard"></div><div class="card" id="healthCard"></div></div>
+  <div class="card mt"><h3>Feed health</h3><div class="chips" id="feeds"></div></div>
+  <div class="card mt"><h3>Activity log</h3><div class="logs" id="logs"></div></div>
+ </section>
+</main>
+<nav class="bnav" id="bnav"></nav>
+<div class="modal" id="modal"><div class="mbox" id="mbox"></div></div>
+<div class="toast" id="toast"></div>

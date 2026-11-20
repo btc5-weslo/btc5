@@ -1,0 +1,38 @@
+# Secrets and credentials — never commit these
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.hf/
+huggingface_token
+hf_token
+*.token
+
+# Local runtime state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+
+# Database, logs, snapshots (ephemeral on Render; backed up to the HF bucket)
+data/
+*.db
+*.db-wal
+*.db-shm
+*.db.snap
+*.db.snap-*
+*.log
+*.pid
+*.lock

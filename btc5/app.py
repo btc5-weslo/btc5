@@ -20,13 +20,17 @@ cfg = Config(); db = DB(cfg.db_path); clock = SyncedClock()
 G = {}
 
 async def clock_loop(client, eng):
-    """Resync every 5 min, immediately after a detected host pause, and every 30 s while unsynced."""
+    """Resync every 5 min once tightly synced, immediately after a detected host pause, and every 20 s while unsynced.
+    Uses clock.synced (tight min-RTT samples), not merely 'we got some HTTP replies' — a slow 0.1 CPU
+    probe can return samples whose RTT is several seconds and must be retried, not cached for 5 min."""
     while True:
         ok = await clock.sync(client)
         d = clock.drift_check()
-        if not ok or not d["ok"]: eng.log("CLOCK", "warning", f"Clock sync problem: {clock.error} {d}")
+        if not clock.synced:
+            eng.log("CLOCK", "warning", f"Clock sync problem: {clock.error} {d}")
+        wait = 300 if clock.synced else 20
         t0 = time.time()
-        while time.time() - t0 < (300 if ok else 30):
+        while time.time() - t0 < wait:
             await asyncio.sleep(1)
             if getattr(eng, "pause_detected", False):
                 eng.pause_detected = False; break
@@ -129,13 +133,14 @@ def health():
     lag = list(eng.loop_lag)
     last = db.one("SELECT round_id, deviation_ms, status FROM rounds WHERE status!='MISSED' ORDER BY start_ts DESC LIMIT 1")
     ws_ok = [feeds[n]["fresh"] for n in ("binance", "coinbase", "kraken", "chainlink")]
+    from . import cloud_tasks
     return {"ok": any(ws_ok) and clock.synced, "server_time": time.time(), "clock": clock.status(), "drift": clock.drift_check(), "feeds": feeds,
             "loop_lag_ms": {"p50": round(sorted(lag)[len(lag) // 2], 2) if lag else None, "max": round(max(lag), 2) if lag else None},
             "tasks": len(eng.tasks), "model": {"version": eng.brain.version, "arch": eng.brain.arch, "loaded": eng.brain.model is not None},
             "training": {k: v for k, v in eng.training.items() if k != "last"}, "challenger": db.kv_get("challenger_status"),
             "last_decision": last, "uptime_s": round(time.time() - G["started"]), "db_bytes": os.path.getsize(cfg.db_path),
             "mode": ("LIVE TRADING (real money)" if G["trader"].settings["mode"] == "live" else "DEMO trading (paper money, real Polymarket prices)") if G.get("trader") else "PREDICTION ONLY",
-            "settings_mode": eng.settings.get("mode")}
+            "settings_mode": eng.settings.get("mode"), "keepalive": cloud_tasks.snapshot()}
 
 @app.get("/api/health")
 def api_health():

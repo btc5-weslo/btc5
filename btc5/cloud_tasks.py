@@ -15,6 +15,8 @@ log = logging.getLogger("btc5.cloud_tasks")
 _stop = None
 _started = False
 _shutdown_backup_done = False
+# Last keep-alive ping, exposed on GET /api/health so a public check can see it.
+KEEPALIVE = {"enabled": False, "url": None, "every_s": None, "last_ts": None, "last_status": None, "last_error": None, "pings": 0}
 
 
 def _say(msg):
@@ -40,9 +42,20 @@ def keepalive_url():
     return f"{base}/api/health" if base else ""
 
 
+def snapshot():
+    out = dict(KEEPALIVE)
+    out["enabled"] = enabled_keepalive()
+    out["url"] = out["url"] or (keepalive_url() or None)
+    out["every_s"] = out["every_s"] or (float(os.environ.get("BTC5_KEEPALIVE_EVERY", "600")) if out["enabled"] else None)
+    if out["last_ts"] is not None:
+        out["age_s"] = round(time.time() - out["last_ts"], 1)
+    return out
+
+
 async def keepalive_loop(client, stop):
     url = keepalive_url()
     interval = float(os.environ.get("BTC5_KEEPALIVE_EVERY", "600"))
+    KEEPALIVE.update(enabled=True, url=url, every_s=interval)
     _say(f"keep-alive start: ping {url} every {interval:.0f}s")
     # Short first delay so a fresh deploy proves the ping works, then settle into the 10-minute cadence.
     first = float(os.environ.get("BTC5_KEEPALIVE_FIRST", "30"))
@@ -54,8 +67,10 @@ async def keepalive_loop(client, stop):
     while not stop.is_set():
         try:
             r = await client.get(url, timeout=20.0, follow_redirects=True)
+            KEEPALIVE.update(last_ts=time.time(), last_status=r.status_code, last_error=None, pings=KEEPALIVE["pings"] + 1)
             _say(f"keep-alive {url} -> {r.status_code}")
         except Exception as e:
+            KEEPALIVE.update(last_ts=time.time(), last_status=None, last_error=f"{type(e).__name__}: {e}", pings=KEEPALIVE["pings"] + 1)
             _say(f"keep-alive failed: {type(e).__name__}: {e}")
         try:
             await asyncio.wait_for(stop.wait(), timeout=max(30.0, interval))

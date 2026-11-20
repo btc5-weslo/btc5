@@ -7,7 +7,7 @@ For each 5-minute round T0 (Polymarket eventStartTime, validated):
                        exactly one immutable DB record per round (UNIQUE + triggers); decision/publish timestamps + deviation recorded
   T300+    COMPLETED   official Polymarket resolution (Gamma 1/0 payout) verified; result + failure analysis recorded
 If the process was not running (box paused) at T90 the round is recorded MISSED with the reason — never back-dated."""
-import asyncio, json, math, time, collections, statistics, traceback, concurrent.futures, multiprocessing
+import asyncio, json, math, os, time, collections, statistics, traceback, concurrent.futures, multiprocessing
 from .config import Config, confidence_class, CONFIDENCE_ORDER
 from .polymarket import round_start_for, MarketIdentificationError
 from . import features as F
@@ -106,7 +106,7 @@ class Engine:
         else: self.log("MODEL", "warning", "No trained model yet — training job scheduled; fallback model in use until then")
         self.spawn(self.lag_monitor())
         self.recover()
-        if not self.brain.model or (time.time() - (self.db.kv_get("last_train_ts") or 0)) > 3600: self.spawn(self.train(backfill=True))
+        if not self.brain.model or (time.time() - (self.db.kv_get("last_train_ts") or 0)) > 3600: self.spawn(self.train_when_clock_ready(backfill=True))
         last_T = None
         while self.running:
             now = self.clock.now(); T = round_start_for(now)
@@ -390,6 +390,15 @@ class Engine:
         if (rec.get("regime") or "").startswith("STRONG") and ("BULLISH" in rec["regime"]) != (outcome == "UP"): reasons.append("Market regime change")
         if not reasons: reasons.append("Low-edge round: outcome within normal noise for the stated probability")
         return reasons
+
+    async def train_when_clock_ready(self, backfill=True, days=None):
+        """Wait for a tight clock sync (or a short deadline) before the process-pool fit, so time
+        probes on a 0.1 CPU host are not competing with sklearn at boot."""
+        deadline = time.time() + float(os.environ.get("BTC5_TRAIN_WAIT_CLOCK_S", "90"))
+        while self.running and time.time() < deadline and not self.clock.synced:
+            await self.sleep(2)
+        if self.running:
+            await self.train(backfill=backfill, days=days)
 
     async def train(self, backfill=True, days=None):
         if self.training["running"]: return

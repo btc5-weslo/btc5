@@ -90,7 +90,17 @@ async def async_loop(stop):
     import asyncio
     log(f"pusher start (in-process): role={ROLE} source={SOURCE} bucket={BUCKET}")
     last_state = None
+    inflight = None          # a cycle thread that outlived the watchdog: never start a second one on top of it
     while not stop.is_set():
+        if inflight is not None and not inflight.done():
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=5)
+                return
+            except asyncio.TimeoutError:
+                continue
+        if inflight is not None:
+            log(f"push cycle that overran the watchdog finished after {time.time() - inflight_t0:.0f} s")
+            inflight = None
         if not logged_in():
             log("no Hugging Face login on this machine - phone feed NOT pushed from here; set HF_TOKEN (re-checking every 60 s)")
             try:
@@ -99,12 +109,16 @@ async def async_loop(stop):
             except asyncio.TimeoutError:
                 continue
         t0 = time.time()
+        fut = asyncio.ensure_future(asyncio.to_thread(cycle))
         try:
-            why = await asyncio.wait_for(asyncio.to_thread(cycle), timeout=60)
+            why = await asyncio.wait_for(asyncio.shield(fut), timeout=60)
             state = why.split(":")[0].split(" (")[0]
             if state != last_state: log(why); last_state = state
+            if time.time() - t0 > 20: log(f"slow push cycle: {time.time() - t0:.0f} s")
         except asyncio.TimeoutError:
-            log("watchdog: push cycle hung > 60 s, skipping (in-process, not exiting)")
+            # The worker thread cannot be cancelled; wait for it instead of piling up more self-requests on a 0.1 CPU host.
+            inflight, inflight_t0 = fut, t0
+            log("watchdog: push cycle hung > 60 s, skipping (in-process, not exiting; next cycle waits for it)")
         except Exception as e:
             log("push error:", repr(e)[:300])
         delay = max(1.0, INTERVAL - (time.time() - t0))

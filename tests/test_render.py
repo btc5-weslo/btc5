@@ -11,7 +11,7 @@ def test_health_ok_while_engine_still_starting():
     saved = dict(A.G)
     A.G.clear()
     try:
-        body = A.api_health()
+        body = asyncio.run(A.api_health())
         assert body["ok"] is False and body["starting"] is True and "server_time" in body
     finally:
         A.G.clear(); A.G.update(saved)
@@ -79,7 +79,7 @@ def test_render_blueprint_and_entrypoint():
     assert "render_start.py" in d
     assert "OMP_NUM_THREADS=1" in d
     assert "plan: free" in y
-    assert "healthCheckPath: /api/health" in y
+    assert "healthCheckPath: /healthz" in y
     assert "runtime: docker" in y
     assert "BTC5_FEED_SOURCE" in y and "cloud" in y
     assert "BTC5_FEED_ROLE" in y and "primary" in y

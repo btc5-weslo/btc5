@@ -6,7 +6,7 @@ services:
     name: btc5
     runtime: docker
     plan: free
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz   # trivial: no DB, locks or thread pool (btc5/app.py healthz)
     envVars:
       - key: HF_TOKEN
         sync: false

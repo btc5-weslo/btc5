@@ -145,12 +145,37 @@ def health():
             "settings_mode": eng.settings.get("mode"), "keepalive": cloud_tasks.snapshot(),
             "persistence": __import__("backup").snapshot_status(), "regrade": __import__("btc5.regrade", fromlist=["snapshot"]).snapshot(), "low_mem": __import__("btc5.config", fromlist=["low_mem"]).low_mem()}
 
+@app.get("/healthz")
+async def healthz():
+    """Render healthCheckPath. Answers straight from the event loop: no database, no locks, no thread pool, no feeds.
+    Heavy jobs run in a nice-19 child process (btc5/childproc.py), so this stays fast while the model retrains."""
+    return {"ok": True, "uptime_s": round(time.time() - G["started"]) if "started" in G else 0, "server_time": time.time()}
+
+_HEALTH = {"task": None, "data": None, "ts": None}
+
 @app.get("/api/health")
-def api_health():
-    # Render healthCheckPath: never 500 just because the engine is still starting.
+async def api_health():
+    """Full status. Never blocks the event loop and never takes longer than BTC5_HEALTH_BUDGET_S (default 1.5 s): the
+    expensive part runs in one worker thread at a time; if it is slow, the last complete status is returned with
+    `stale_s`, plus live uptime / memory / training fields."""
     if "eng" not in G or "live" not in G:
         return {"ok": False, "starting": True, "server_time": time.time()}
-    return health()
+    t = _HEALTH["task"]
+    if t is None or t.done():
+        t = _HEALTH["task"] = asyncio.ensure_future(asyncio.to_thread(health))
+    try:
+        d = await asyncio.wait_for(asyncio.shield(t), timeout=float(os.environ.get("BTC5_HEALTH_BUDGET_S", "1.5")))
+        _HEALTH.update(data=d, ts=time.time()); d = dict(d)
+    except asyncio.TimeoutError:
+        d = dict(_HEALTH["data"] or {"ok": True, "partial": True})
+        d["stale_s"] = round(time.time() - _HEALTH["ts"], 1) if _HEALTH["ts"] else None
+    except Exception as e:
+        d = dict(_HEALTH["data"] or {"ok": False}); d["health_error"] = f"{type(e).__name__}: {e}"[:200]
+    from . import childproc
+    eng = G["eng"]
+    d.update(server_time=time.time(), uptime_s=round(time.time() - G["started"]), memory=childproc.snapshot(),
+             training={k: v for k, v in eng.training.items() if k != "last"})
+    return d
 
 def latest_backtest():
     r = db.one("SELECT ts, results_json FROM backtests ORDER BY id DESC LIMIT 1")
@@ -225,31 +250,42 @@ def api_backtest():
     return {"latest": latest_backtest(), "runs": r}
 
 @app.post("/api/backtest/run")
-async def api_bt_run(body: dict = Body(default={})):
+async def api_bt_run(request: Request, body: dict = Body(default={})):
+    require_token(request)   # heavy job: on a public URL only the owner may start it
     days = body.get("days")
     days = float(days) if days else None
     eng = G["eng"]
     async def go():
         eng.log("BACKTEST", "info", f"Backtest started (days={days or 'all'})")
-        r = await asyncio.get_running_loop().run_in_executor(eng.pool, _bt_job, days)
-        eng.log("BACKTEST", "info", f"Backtest finished: {r}")
+        try:
+            from .engine import use_child_process
+            if use_child_process():
+                from . import childproc
+                if eng.training["running"]:
+                    eng.log("BACKTEST", "warning", "Backtest skipped: a training job is running (one heavy job at a time on this host)"); return
+                eng.training["running"] = True     # one heavy child at a time (memory)
+                try: r = (await childproc.run_job("backtest", {"days": days}, now_fn=clock.now, log=lambda m: eng.log("BACKTEST", "info", m))).get("summary")
+                finally: eng.training["running"] = False
+            else:
+                r = await asyncio.get_running_loop().run_in_executor(eng.pool, _bt_job, days)
+            eng.log("BACKTEST", "info", f"Backtest finished: {r}")
+        except Exception as e:
+            eng.log("BACKTEST", "error", f"Backtest failed: {e}")
     bg(go()); return {"started": True, "days": days}
 
 def _bt_job(days):
-    from .config import Config as C
-    from .db import DB as D
-    d = D(C().db_path); res = BT.run(d, days)
-    if "error" in res: return res["error"]
-    d.x("INSERT INTO backtests(ts,params_json,results_json) VALUES (?,?,?)", (time.time(), json.dumps({"days": days, "trigger": "manual"}), json.dumps(res, default=str)))
-    return f"{res['n_test']} OOS rounds, ensemble accuracy {res['models']['stack']['accuracy']}"
+    from .app_jobs import backtest_job
+    return backtest_job(days)
 
 @app.post("/api/history/backfill")
-async def api_backfill(body: dict = Body(default={})):
+async def api_backfill(request: Request, body: dict = Body(default={})):
+    require_token(request)
     days = float(body.get("days") or cfg.backfill_days); eng = G["eng"]
     bg(eng.train(backfill=True, days=days)); return {"started": True, "days": days, "note": "real-data backfill + retrain/evaluation job"}
 
 @app.post("/api/model/retrain")
-async def api_retrain():
+async def api_retrain(request: Request):
+    require_token(request)
     bg(G["eng"].train(backfill=False)); return {"started": True}
 
 @app.get("/api/models")

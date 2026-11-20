@@ -9,6 +9,11 @@ For each 5-minute round T0 (Polymarket eventStartTime, validated):
 If the process was not running (box paused) at T90 the round is recorded MISSED with the reason — never back-dated."""
 import asyncio, json, math, os, time, collections, statistics, traceback, concurrent.futures, multiprocessing
 from .config import Config, low_mem, confidence_class, CONFIDENCE_ORDER
+
+
+def use_child_process():
+    """Heavy jobs run in a nice-19 child process on low-memory hosts (Render free). BTC5_TRAIN_CHILD=0 restores in-process."""
+    return low_mem() and os.environ.get("BTC5_TRAIN_CHILD", "1") == "1"
 from .polymarket import round_start_for, MarketIdentificationError
 from . import features as F
 from .agents import specialist_reports, validator_report
@@ -78,7 +83,8 @@ class Engine:
         self.training = {"running": False, "last": None, "last_ts": None, "error": None}
         self.resolved_since_train = 0
         self.loop_lag = collections.deque(maxlen=240)
-        # A spawn-pool worker would load a second copy of numpy/sklearn and OOM a 512 MB host. On low-mem we train in-process.
+        # A long-lived spawn-pool worker would keep a second copy of numpy/sklearn resident on a 512 MB host. On low-mem we
+        # instead start a short-lived nice-19 child per job (btc5/childproc.py) and let it exit afterwards.
         self.pool = None if low_mem() else concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
         self.trader = None            # btc5.trading.Trader (attached by app.py); trades only AFTER the immutable lock
 
@@ -426,7 +432,7 @@ class Engine:
     async def train(self, backfill=True, days=None):
         if self.training["running"]: return
         self.training.update(running=True, started=time.time(), error=None)
-        where = "in-process, light window" if low_mem() else "separate process"
+        where = "low-priority child process, light window" if use_child_process() else ("in-process, light window" if low_mem() else "separate process")
         self.log("MODEL", "info", f"Training job started ({where}): incremental real-data backfill + walk-forward + champion/challenger")
         try:
             import backup
@@ -434,7 +440,14 @@ class Engine:
         except Exception:
             backup = None
         try:
-            if self.pool is not None:
+            if use_child_process():
+                # Render free: a nice-19 child process (no GIL sharing, OOM-victim, frozen during the lock window),
+                # so the health check, the T0+90 s lock and grading always get the CPU first. See btc5/childproc.py.
+                await self._wait_outside_lock_window()
+                from . import childproc
+                out = await childproc.run_job("train", {"backfill": bool(backfill), "days": days}, now_fn=self.clock.now,
+                                              log=lambda m: self.log("MODEL", "info", m))
+            elif self.pool is not None:
                 out = await asyncio.get_running_loop().run_in_executor(self.pool, training.job, backfill, days)
             else:
                 out = await asyncio.to_thread(training.job, backfill, days)
@@ -450,6 +463,13 @@ class Engine:
                     backup.set_training(False)
             except Exception:
                 pass
+
+    async def _wait_outside_lock_window(self):
+        """Don't even start a heavy job between T0+50 s and T0+110 s (the T0+90 s lock window)."""
+        from .childproc import in_lock_window
+        for _ in range(120):
+            if not in_lock_window(self.clock.now(), 50, 110): return
+            await self.sleep(1)
 
     @staticmethod
     def public(rec):

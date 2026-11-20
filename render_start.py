@@ -71,6 +71,11 @@ def main():
         signal.signal(signal.SIGTERM, _on_term)
     except Exception as e:
         log(f"could not install SIGTERM handler: {e!r}")
+    if os.environ.get("BTC5_LOW_MEM") == "1" and os.environ.get("BTC5_PIN_CPU", "1") == "1":
+        # One core for the server AND its nice-19 training child, so the kernel's nice priority actually applies
+        # (a child on another core would burn the 0.1-CPU quota in parallel and get the whole container throttled).
+        from btc5.childproc import pin_to_one_cpu
+        log(f"pinned to CPU {pin_to_one_cpu()}")
     import uvicorn
     # One process: the app lifespan starts keep-alive / backup / pusher tasks.
     uvicorn.run("btc5.app:app", host="0.0.0.0", port=PORT, access_log=False)

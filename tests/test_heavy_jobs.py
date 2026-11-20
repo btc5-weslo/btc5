@@ -78,3 +78,26 @@ def test_low_mem_training_uses_child_process(tmp_path, monkeypatch):
     assert E.use_child_process() is True
     monkeypatch.setenv("BTC5_TRAIN_CHILD", "0"); assert E.use_child_process() is False
     monkeypatch.setenv("BTC5_LOW_MEM", "0"); monkeypatch.delenv("BTC5_TRAIN_CHILD"); assert E.use_child_process() is False
+
+
+def test_child_cpu_budget_duty_cycles_a_cpu_hog(monkeypatch):
+    """With a 0.4-CPU quota and a 50 % share the child may use ~0.2 CPU: 0.8 s of spinning must take >= ~3 s wall."""
+    from btc5 import childproc
+    monkeypatch.setenv("BTC5_CPU_QUOTA", "0.4"); monkeypatch.setenv("BTC5_CHILD_CPU_SHARE", "0.5")
+    t = time.time()
+    asyncio.run(childproc.run_job("selftest", {"spin": 0.8}, now_fn=lambda: 1200.0, log=lambda m: None))
+    wall = time.time() - t
+    assert wall >= 3.0, wall
+    assert childproc.MEM["cpu_throttle_s"] > 0 and childproc.MEM["cpu_budget_cpus"] == pytest.approx(0.2)
+
+
+def test_pin_to_one_cpu_is_safe():
+    from btc5 import childproc
+    before = os.sched_getaffinity(0)
+    try:
+        cpu = childproc.pin_to_one_cpu()
+        assert cpu in before and os.sched_getaffinity(0) == {cpu}
+    finally:
+        for tid in os.listdir("/proc/self/task"):
+            try: os.sched_setaffinity(int(tid), before)
+            except Exception: pass

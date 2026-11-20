@@ -49,6 +49,8 @@ def main(argv):
             buf = bytearray(int(args.get("alloc_mb", 0)) * 1024 * 1024)
             for i in range(0, len(buf), 4096): buf[i] = 1
             time.sleep(float(args.get("sleep", 0)))
+            c0 = time.process_time()
+            while time.process_time() - c0 < float(args.get("spin", 0)): pass
             with open("/proc/self/oom_score_adj") as f: oom = int(f.read().strip())
             res = {"nice": os.nice(0), "oom_score_adj": oom, "allocated_mb": len(buf) // (1024 * 1024)}
         else:
